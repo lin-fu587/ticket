@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import time
 import threading
@@ -24,42 +25,41 @@ def init_db():
     conn.close()
 
 def fetch_threads_via_api():
-    """模擬 Threads 前端搜尋 API 抓取資料（含詳細 Debug 日誌）"""
-    search_url = "https://www.threads.net/api/v1/search/serp/"
+    """模擬 Threads 前端 GraphQL 搜尋 API 抓取資料"""
+    search_url = "https://www.threads.net/api/graphql/query"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "X-IG-App-ID": "238260118697367",  # Threads 網頁版的 App ID
+        "X-IG-App-ID": "238260118697367",
+        "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "*/*"
     }
     
-    params = {
-        "query": "QWER 讓票",
-        "search_surface": "default"
+    # 採用 Threads 網頁版搜尋用的 doc_id
+    payload = {
+        "doc_id": "7032128800185348",
+        "variables": f'{{"query":"QWER 讓票","meta_place_id":null}}'
     }
 
-    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 API 檢索 ====================")
+    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 API 檢索 ====================", flush=True)
     try:
-        response = requests.get(search_url, headers=headers, params=params, timeout=10)
-        print(f"1. HTTP 狀態碼: {response.status_code}")
+        response = requests.post(search_url, headers=headers, data=payload, timeout=10)
+        print(f"1. HTTP 狀態碼: {response.status_code}", flush=True)
         
         if response.status_code == 200:
             try:
                 data = response.json()
             except Exception as json_err:
-                print(f"❌ JSON 解析失敗，可能回傳了 HTML 錯誤頁面。前 200 字內容：\n{response.text[:200]}")
+                print(f"❌ JSON 解析失敗，前 200 字內容：\n{response.text[:200]}", flush=True)
                 return
 
-            # 查看頂層 Key 結構
-            print(f"2. API 成功回傳 JSON，頂層 Key 有: {list(data.keys())}")
-            
-            # 解析 Threads 回傳的 JSON 階層
-            search_results = data.get("data", {}).get("searchResults", {})
+            # 解析 Threads 回傳 JSON 階層
+            search_results = data.get("data", {}).get("searchResults", {}) or data.get("data", {}).get("searchResultsFeed", {})
             sections = search_results.get("edges", [])
-            print(f"3. 找到 {len(sections)} 筆 edges (搜尋結果個數)")
+            print(f"2. 找到 {len(sections)} 筆結果", flush=True)
 
             if len(sections) == 0:
-                print(f"⚠️ 注意：edges 為空！Threads 回傳的 JSON 結構內容前 300 字為：\n{str(data)[:300]}")
+                print(f"⚠️ 注意：edges 為空！回傳前 200 字為：\n{str(data)[:200]}", flush=True)
 
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
@@ -76,7 +76,8 @@ def fetch_threads_via_api():
                     caption = post.get("caption", {})
                     text = caption.get("text", "") if caption else ""
                     
-                    print(f"   [掃描到的內文預覽]: {text[:30]}...")
+                    if text:
+                        print(f"   [掃描到的內文預覽]: {text[:30].replace('\n', ' ')}...", flush=True)
 
                     # 關鍵字二次過濾
                     if text and any(k in text for k in ["讓票", "賣票", "VIP", "換票", "QWER"]):
@@ -95,13 +96,13 @@ def fetch_threads_via_api():
 
             conn.commit()
             conn.close()
-            print(f"4. 總共掃描 {scanned_posts} 則貼文，成功新增 {inserted_count} 筆新資料至 SQLite。")
+            print(f"3. 總共掃描 {scanned_posts} 則貼文，成功新增 {inserted_count} 筆新資料至 SQLite。", flush=True)
         else:
-            print(f"❌ API 請求失敗，狀態碼不是 200。回傳內容：\n{response.text[:300]}")
+            print(f"❌ API 請求失敗，狀態碼不是 200。回傳內容：\n{response.text[:200]}", flush=True)
 
     except Exception as e:
-        print(f"❌ API 抓取時發生未預期錯誤: {e}")
-    print("========================================================================\n")
+        print(f"❌ API 抓取時發生未預期錯誤: {e}", flush=True)
+    print("========================================================================\n", flush=True)
 
 def run_scraper():
     while True:
@@ -120,6 +121,9 @@ def index():
 
 if __name__ == "__main__":
     init_db()
-    # 啟動時先手動抓一次
+    # 啟動背景爬蟲
     threading.Thread(target=run_scraper, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    
+    # 動態抓取 Render 指派的 PORT，防止服務崩潰
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
