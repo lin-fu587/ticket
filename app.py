@@ -35,7 +35,6 @@ def fetch_threads_via_api():
         "Accept": "*/*"
     }
     
-    # 採用 Threads 網頁版搜尋用的 doc_id
     payload = {
         "doc_id": "7032128800185348",
         "variables": f'{{"query":"QWER 讓票","meta_place_id":null}}'
@@ -53,7 +52,6 @@ def fetch_threads_via_api():
                 print(f"❌ JSON 解析失敗，前 200 字內容：\n{response.text[:200]}", flush=True)
                 return
 
-            # 解析 Threads 回傳 JSON 階層
             search_results = data.get("data", {}).get("searchResults", {}) or data.get("data", {}).get("searchResultsFeed", {})
             sections = search_results.get("edges", [])
             print(f"2. 找到 {len(sections)} 筆結果", flush=True)
@@ -77,9 +75,10 @@ def fetch_threads_via_api():
                     text = caption.get("text", "") if caption else ""
                     
                     if text:
-                        print(f"   [掃描到的內文預覽]: {text[:30].replace('\n', ' ')}...", flush=True)
+                        # 將換行替換抽到 f-string 外部避免 SyntaxError
+                        preview_text = text[:30].replace("\n", " ")
+                        print(f"   [掃描到的內文預覽]: {preview_text}...", flush=True)
 
-                    # 關鍵字二次過濾
                     if text and any(k in text for k in ["讓票", "賣票", "VIP", "換票", "QWER"]):
                         pid = post.get("id")
                         user = post.get("user", {}).get("username", "未知用戶")
@@ -107,7 +106,6 @@ def fetch_threads_via_api():
 def run_scraper():
     while True:
         fetch_threads_via_api()
-        # 每 5 分鐘執行一次
         time.sleep(300)
 
 @app.route("/")
@@ -121,9 +119,7 @@ def index():
 
 if __name__ == "__main__":
     init_db()
-    # 啟動背景爬蟲
     threading.Thread(target=run_scraper, daemon=True).start()
     
-    # 動態抓取 Render 指派的 PORT，防止服務崩潰
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
