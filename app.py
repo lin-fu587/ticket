@@ -8,105 +8,83 @@ from flask import Flask, render_template
 app = Flask(__name__)
 DB_NAME = "tickets.db"
 
+# 填入你申請到的 Google API 金鑰與 CX ID (也可以設定在 Render 的 Environment Variables)
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+GOOGLE_CX = os.environ.get("GOOGLE_CX", "")
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            post_id TEXT UNIQUE,
+            post_url TEXT UNIQUE,
+            title TEXT,
             content TEXT,
             user_handle TEXT,
-            post_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
     conn.close()
 
-def fetch_threads_via_api():
-    """模擬 Threads 前端 GraphQL 搜尋 API 抓取資料"""
-    search_url = "https://www.threads.net/api/graphql/query"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "X-IG-App-ID": "238260118697367",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "*/*"
+def fetch_via_google():
+    """透過 Google Custom Search 全域搜尋 Threads (絕不封號、無阻擋)"""
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": GOOGLE_API_KEY,
+        "cx": GOOGLE_CX,
+        "q": "site:threads.net QWER (讓票 OR 卖票 OR VIP OR 票)",
+        "num": 10
     }
     
-    payload = {
-        "doc_id": "7032128800185348",
-        "variables": f'{{"query":"QWER 讓票","meta_place_id":null}}'
-    }
-
-    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 API 檢索 ====================", flush=True)
+    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 Google 檢索 Threads ====================", flush=True)
     try:
-        response = requests.post(search_url, headers=headers, data=payload, timeout=10)
-        print(f"1. HTTP 狀態碼: {response.status_code}", flush=True)
+        res = requests.get(url, params=params, timeout=10)
+        print(f"1. HTTP 狀態碼: {res.status_code}", flush=True)
         
-        if response.status_code == 200:
-            try:
-                data = response.json()
-            except Exception as json_err:
-                print(f"❌ JSON 解析失敗，前 200 字內容：\n{response.text[:200]}", flush=True)
-                return
-
-            search_results = data.get("data", {}).get("searchResults", {}) or data.get("data", {}).get("searchResultsFeed", {})
-            sections = search_results.get("edges", [])
-            print(f"2. 找到 {len(sections)} 筆結果", flush=True)
-
-            if len(sections) == 0:
-                print(f"⚠️ 注意：edges 為空！回傳前 200 字為：\n{str(data)[:200]}", flush=True)
-
+        if res.status_code == 200:
+            data = res.json()
+            items = data.get("items", [])
+            print(f"2. 找到 {len(items)} 筆搜尋結果", flush=True)
+            
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
             inserted_count = 0
-            scanned_posts = 0
-
-            for edge in sections:
-                node = edge.get("node", {})
-                thread_items = node.get("thread", {}).get("thread_items", [])
+            
+            for item in items:
+                link = item.get("link", "")
+                title = item.get("title", "")
+                snippet = item.get("snippet", "")
                 
-                for item in thread_items:
-                    scanned_posts += 1
-                    post = item.get("post", {})
-                    caption = post.get("caption", {})
-                    text = caption.get("text", "") if caption else ""
+                # 從網址解析出使用者名稱 (例如 https://www.threads.net/@user/post/xxx)
+                user_handle = "Threads用戶"
+                if "@" in link:
+                    user_handle = link.split("@")[1].split("/")[0]
+
+                cursor.execute('''
+                    INSERT OR IGNORE INTO posts (post_url, title, content, user_handle)
+                    VALUES (?, ?, ?, ?)
+                ''', (link, title, snippet, user_handle))
+                
+                if cursor.rowcount > 0:
+                    inserted_count += 1
                     
-                    if text:
-                        # 將換行替換抽到 f-string 外部避免 SyntaxError
-                        preview_text = text[:30].replace("\n", " ")
-                        print(f"   [掃描到的內文預覽]: {preview_text}...", flush=True)
-
-                    if text and any(k in text for k in ["讓票", "賣票", "VIP", "換票", "QWER"]):
-                        pid = post.get("id")
-                        user = post.get("user", {}).get("username", "未知用戶")
-                        code = post.get("code", "")
-                        post_url = f"https://www.threads.net/@{user}/post/{code}" if code else ""
-                        
-                        cursor.execute('''
-                            INSERT OR IGNORE INTO posts (post_id, content, user_handle, post_url)
-                            VALUES (?, ?, ?, ?)
-                        ''', (pid, text, user, post_url))
-                        
-                        if cursor.rowcount > 0:
-                            inserted_count += 1
-
             conn.commit()
             conn.close()
-            print(f"3. 總共掃描 {scanned_posts} 則貼文，成功新增 {inserted_count} 筆新資料至 SQLite。", flush=True)
+            print(f"3. 成功新增 {inserted_count} 筆新讓票文章至 SQLite。", flush=True)
         else:
-            print(f"❌ API 請求失敗，狀態碼不是 200。回傳內容：\n{response.text[:200]}", flush=True)
+            print(f"❌ Google API 請求失敗，狀態碼: {res.status_code}，訊息: {res.text[:200]}", flush=True)
 
     except Exception as e:
-        print(f"❌ API 抓取時發生未預期錯誤: {e}", flush=True)
+        print(f"❌ 檢索時發生未預期錯誤: {e}", flush=True)
     print("========================================================================\n", flush=True)
 
 def run_scraper():
     while True:
-        fetch_threads_via_api()
-        time.sleep(300)
+        fetch_via_google()
+        # Google API 免費額度每天 100 次，設定 15 分鐘（900秒）檢查一次剛好不會超過額度
+        time.sleep(900)
 
 @app.route("/")
 def index():
