@@ -1,3 +1,28 @@
+import sqlite3
+import time
+import threading
+import requests
+from flask import Flask, render_template
+
+app = Flask(__name__)
+DB_NAME = "tickets.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id TEXT UNIQUE,
+            content TEXT,
+            user_handle TEXT,
+            post_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 def fetch_threads_via_api():
     """模擬 Threads 前端搜尋 API 抓取資料（含詳細 Debug 日誌）"""
     search_url = "https://www.threads.net/api/v1/search/serp/"
@@ -77,3 +102,24 @@ def fetch_threads_via_api():
     except Exception as e:
         print(f"❌ API 抓取時發生未預期錯誤: {e}")
     print("========================================================================\n")
+
+def run_scraper():
+    while True:
+        fetch_threads_via_api()
+        # 每 5 分鐘執行一次
+        time.sleep(300)
+
+@app.route("/")
+def index():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_handle, content, post_url, created_at FROM posts ORDER BY id DESC LIMIT 50")
+    data = cursor.fetchall()
+    conn.close()
+    return render_template("index.html", posts=data)
+
+if __name__ == "__main__":
+    init_db()
+    # 啟動時先手動抓一次
+    threading.Thread(target=run_scraper, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
