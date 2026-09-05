@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QWER 讓票資訊即時看板</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #121212; color: #fff; padding: 20px; max-width: 800px; margin: auto; }
+        h1 { color: #1da1f2; text-align: center; }
+        .post-card { background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 15px; white-space: pre-wrap; }
+        .time { font-size: 0.8em; color: #888; margin-bottom: 8px; }
+        .refresh-btn { display: block; width: 100%; padding: 10px; background: #1da1f2; color: white; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>QWER 讓票 / 賣票即時看板</h1>
+    <button class="refresh-btn" onclick="location.reload()">重新整理頁面</button>
+    
+    {% for post in posts %}
+        <div class="post-card">
+            <div class="time">抓取時間：{{ post[1] }}</div>
+            <div>{{ post[0] }}</div>
+        </div>
+    {% else %}
+        <p style="text-align:center;">目前尚無讓票資料，請稍後再試...</p>
+    {% endfor %}
+</body>
+</html>
