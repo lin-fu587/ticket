@@ -2,15 +2,11 @@ import os
 import sqlite3
 import time
 import threading
-import requests
+import feedparser
 from flask import Flask, render_template
 
 app = Flask(__name__)
 DB_NAME = "tickets.db"
-
-# 填入你申請到的 Google API 金鑰與 CX ID (也可以設定在 Render 的 Environment Variables)
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-GOOGLE_CX = os.environ.get("GOOGLE_CX", "")
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -28,63 +24,53 @@ def init_db():
     conn.commit()
     conn.close()
 
-def fetch_via_google():
-    """透過 Google Custom Search 全域搜尋 Threads (絕不封號、無阻擋)"""
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": GOOGLE_API_KEY,
-        "cx": GOOGLE_CX,
-        "q": "site:threads.net QWER (讓票 OR 卖票 OR VIP OR 票)",
-        "num": 10
-    }
+def fetch_threads_via_rss():
+    """透過 RSS 抓取 Threads 搜尋結果 (免 API Key、免驗證、零被擋風險)"""
+    rss_url = "https://rsshub.app/threads/search/QWER%20讓票"
     
-    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 Google 檢索 Threads ====================", flush=True)
+    print(f"\n==================== [{time.strftime('%H:%M:%S')}] 開始執行 RSS 檢索 Threads ====================", flush=True)
     try:
-        res = requests.get(url, params=params, timeout=10)
-        print(f"1. HTTP 狀態碼: {res.status_code}", flush=True)
-        
-        if res.status_code == 200:
-            data = res.json()
-            items = data.get("items", [])
-            print(f"2. 找到 {len(items)} 筆搜尋結果", flush=True)
-            
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            inserted_count = 0
-            
-            for item in items:
-                link = item.get("link", "")
-                title = item.get("title", "")
-                snippet = item.get("snippet", "")
-                
-                # 從網址解析出使用者名稱 (例如 https://www.threads.net/@user/post/xxx)
-                user_handle = "Threads用戶"
-                if "@" in link:
-                    user_handle = link.split("@")[1].split("/")[0]
+        feed = feedparser.parse(rss_url)
+        entries = feed.entries
+        print(f"1. 成功讀取 RSS，找到 {len(entries)} 筆項目", flush=True)
 
-                cursor.execute('''
-                    INSERT OR IGNORE INTO posts (post_url, title, content, user_handle)
-                    VALUES (?, ?, ?, ?)
-                ''', (link, title, snippet, user_handle))
-                
-                if cursor.rowcount > 0:
-                    inserted_count += 1
-                    
-            conn.commit()
-            conn.close()
-            print(f"3. 成功新增 {inserted_count} 筆新讓票文章至 SQLite。", flush=True)
-        else:
-            print(f"❌ Google API 請求失敗，狀態碼: {res.status_code}，訊息: {res.text[:200]}", flush=True)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        inserted_count = 0
+
+        for entry in entries:
+            link = entry.get("link", "")
+            title = entry.get("title", "")
+            summary = entry.get("summary", "")
+
+            user_handle = "Threads用戶"
+            if "@" in link:
+                try:
+                    user_handle = link.split("@")[1].split("/")[0]
+                except Exception:
+                    pass
+
+            cursor.execute('''
+                INSERT OR IGNORE INTO posts (post_url, title, content, user_handle)
+                VALUES (?, ?, ?, ?)
+            ''', (link, title, summary, user_handle))
+
+            if cursor.rowcount > 0:
+                inserted_count += 1
+
+        conn.commit()
+        conn.close()
+        print(f"2. 成功新增 {inserted_count} 筆新讓票文章至 SQLite。", flush=True)
 
     except Exception as e:
-        print(f"❌ 檢索時發生未預期錯誤: {e}", flush=True)
+        print(f"❌ RSS 檢索失敗: {e}", flush=True)
     print("========================================================================\n", flush=True)
 
 def run_scraper():
     while True:
-        fetch_via_google()
-        # Google API 免費額度每天 100 次，設定 15 分鐘（900秒）檢查一次剛好不會超過額度
-        time.sleep(900)
+        fetch_threads_via_rss()
+        # 每 10 分鐘（600秒）檢查一次
+        time.sleep(600)
 
 @app.route("/")
 def index():
